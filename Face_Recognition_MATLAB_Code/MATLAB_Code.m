@@ -1,193 +1,84 @@
-%--------------------------------------
-% ana_script.m
+clc; clear; close all;
 
-positive_folder = 'Ben_2025-07-07_10-38-07';
-negative_folder = 'Negatives'; % Tam yolunu yaz
+%% 1. MODEL EĞİTİMİ (HIZLI VE STABİL)
+posFolder = 'Real_Person';
+negFolder = 'Fake_People';
 
-positive_files = dir(fullfile(positive_folder, '*.jpg'));
-negative_files = dir(fullfile(negative_folder, '*.jpeg'));
+posFiles = dir(fullfile(posFolder, '*.jpg'));
+negFiles = dir(fullfile(negFolder, '*.jpg'));
 
-X = [];
-Y = [];
+X = []; Y = [];
+fprintf('Model eğitiliyor, lütfen bekleyin...\n');
 
-% Pozitif örnekler
-for i = 1:length(positive_files)
-    img = imread(fullfile(positive_folder, positive_files(i).name));
-    img_gray = rgb2gray(img);
-    img_resized = imresize(img_gray, [64 64]);
-    img_double = im2double(img_resized);
-
-    feat = extract_features_hog_sobel(img_double);
-    feat = reshape(feat, 1, []);
-    X = [X; feat];
+for i = 1:length(posFiles)
+    img = imread(fullfile(posFolder, posFiles(i).name));
+    X = [X; my_simple_features(img)];
     Y = [Y; 1];
 end
 
-% Negatif örnekler
-for i = 1:length(negative_files)
-    img = imread(fullfile(negative_folder, negative_files(i).name));
-    img_gray = rgb2gray(img);
-    img_resized = imresize(img_gray, [64 64]);
-    img_double = im2double(img_resized);
-
-    feat = extract_features_hog_sobel(img_double);
-    feat = reshape(feat, 1, []);
-
-    fprintf('Negatif örnek %d min: %.5f, max: %.5f, NaN sayısı: %d\n', i, min(feat), max(feat), sum(isnan(feat)));
-
-    X = [X; feat];
+for i = 1:length(negFiles)
+    img = imread(fullfile(negFolder, negFiles(i).name));
+    X = [X; my_simple_features(img)];
     Y = [Y; -1];
 end
 
-% Negatif örneklerde benzersiz satır sayısı
-unique_neg = unique(X(Y==-1, :), 'rows');
-fprintf('Negatif örneklerde benzersiz örnek sayısı: %d\n', size(unique_neg,1));
-
-% Ortalama ve standart sapma
-mu = mean(X, 1);
-sigma = std(X, [], 1);
-
-% NaN ve 0 varyans düzeltmesi
-sigma(isnan(sigma) | sigma == 0) = 1;
-
-% Normalize et
+% Normalizasyon ve SVM (RBF Kernel)
+mu = mean(X); sigma = std(X); sigma(sigma == 0) = 1;
 X_norm = (X - mu) ./ sigma;
+SVMModel = fitcsvm(X_norm, Y, 'KernelFunction', 'rbf', 'Standardize', true);
 
-% SVM parametreleri
-C = 1;
-lr = 0.01;
-epochs = 10000;
+% Eşik Ayarı (Seni tanıması için güvenli alan)
+[~, scores] = predict(SVMModel, X_norm);
+posScores = scores(Y==1, 2);
+safe_threshold = mean(posScores) - 1.8 * std(posScores); 
 
-[w, b] = train_svm(X_norm, Y, C, lr, epochs);
+fprintf('Sistem Hazır! 10 karelik analiz başlıyor...\n');
 
-% Eğitim skorları
-scores_train = X_norm * w' + b;
-disp('Pozitif örnek skorları:');
-disp(scores_train(Y==1));
-disp('Negatif örnek skorları:');
-disp(scores_train(Y==-1));
+%% 2. 10 KARELİK ADIM ADIM TEST (KASMA YAPMAZ)
+try
+    cam = webcam;
+catch
+    delete(webcamlist); cam = webcam;
+end
 
-mean_pos = mean(scores_train(Y==1));
-mean_neg = mean(scores_train(Y==-1));
-threshold = (mean_pos + mean_neg) / 2;
-
-fprintf('Pozitif skor ortalaması: %.4f\n', mean_pos);
-fprintf('Negatif skor ortalaması: %.4f\n', mean_neg);
-fprintf('Belirlenen threshold: %.4f\n', threshold);
-
-% Canlı görüntü al ve özellik çıkar
-cam = webcam;
-img_live = snapshot(cam);
-img_live_gray = rgb2gray(img_live);
-img_live_resized = imresize(img_live_gray, [64 64]);
-img_live_double = im2double(img_live_resized);
-
-feat_live = extract_features_hog_sobel(img_live_double);
-feat_live = reshape(feat_live, 1, []);
-
-% NaN'ları sıfırla (güvenlik)
-feat_live(isnan(feat_live)) = 0;
-
-feat_live_norm = (feat_live - mu) ./ sigma;
-
-score = dot(w, feat_live_norm) + b;
-fprintf('Canlı görüntü skoru: %.4f\n', score);
-fprintf('Threshold: %.4f\n', threshold);
-
-if score >= threshold
-    disp('Bu sensin!');
-else
-    disp('Sen değilsin.');
+for i = 1:10
+    fprintf('\n%d. Kare için hazırlan... (3 saniye)', i);
+    pause(3); % Poz vermen için zaman tanır
+    
+    % Fotoğrafı çek ve kamerayı o anlık dondur
+    img_live = snapshot(cam);
+    
+    % Analiz et
+    feat_live = my_simple_features(img_live);
+    feat_norm = (feat_live - mu) ./ sigma;
+    [label, score] = predict(SVMModel, feat_norm);
+    
+    % Karar Mekanizması
+    if label == 1 && score(2) > safe_threshold
+        fprintf('\n>>> SONUÇ: BU SENSİN (Skor: %.2f)\n', score(2));
+        % Görsel onay istersen imshow(img_live) buraya eklenebilir ama şart değil
+    else
+        fprintf('\n>>> SONUÇ: SEN DEĞİLSİN (Skor: %.2f)\n', score(2));
+    end
 end
 
 clear cam;
-disp(length(negative_files)) 
-%--------------------------------------------------------
+fprintf('\n10 karelik test tamamlandı.\n');
 
-function y_pred = predict_svm(X, w, b)
-    y_pred = sign(X * w' + b);
-end
+%% --- HAFİF ÖZNİTELİK FONKSİYONU ---
+function feat = my_simple_features(img)
+    if size(img, 3) == 3, img = rgb2gray(img); end
+    img = imresize(img, [64 64]);
+    img = im2double(img);
 
-%-------------------------------------------------------
-function [w, b] = train_svm(X, Y, C, lr, epochs)
-    [N, D] = size(X);
-    w = zeros(1, D);
-    b = 0;
-
-    for epoch = 1:epochs
-        for i = 1:N
-            xi = X(i, :);
-            yi = Y(i);
-            margin = yi * (w * xi' + b);
-            if margin >= 1
-                grad_w = w;
-                grad_b = 0;
-            else
-                grad_w = w - C * yi * xi;
-                grad_b = -C * yi;
-            end
-            w = w - lr * grad_w;
-            b = b - lr * grad_b;
-        end
-
-        if mod(epoch, 1000) == 0
-            margins = Y .* (X * w' + b);
-            loss = 0.5 * (w * w') + C * sum(max(0, 1 - margins));
-            fprintf('Epoch %d, Loss: %.6f\n', epoch, loss);
-        end
-    end
-end
-
-%-------------------------------------------------------------------------
-
-function features = extract_features_hog_sobel(img)
-    % img: 64x64 gri tonlu, double [0 1] arası görüntü
-    
-    % Sobel filtreleri (x ve y için)
-    sobel_x = [1 0 -1; 2 0 -2; 1 0 -1];
-    sobel_y = sobel_x';
-    
-    % Gradyanları hesapla (convolution)
-    Gx = conv2(img, sobel_x, 'same');
-    Gy = conv2(img, sobel_y, 'same');
-    
-    % Magnitüd ve açı
+    % Sobel - Kenar
+    Gx = conv2(img, [1 0 -1; 2 0 -2; 1 0 -1], 'same');
+    Gy = conv2(img, [1 2 1; 0 0 0; -1 -2 -1], 'same');
     Gmag = sqrt(Gx.^2 + Gy.^2);
-    Gdir = atan2d(Gy, Gx);
     
-    % Açıları 0-180 derece aralığına getir
-    Gdir(Gdir < 0) = Gdir(Gdir < 0) + 180;
-    
-    % Hücre boyutu ve sayısı
-    cellSize = 8;
-    numCells = size(img,1) / cellSize; % 64/8=8
-    
-    % Histogram ayarları
-    binEdges = linspace(0, 180, 10); % 9 binli histogram
-    
-    features = [];
-    
-    % Hücre bazında histogramları hesapla
-    for i = 1:numCells
-        for j = 1:numCells
-            rows = (i-1)*cellSize+1 : i*cellSize;
-            cols = (j-1)*cellSize+1 : j*cellSize;
-            cellDirs = Gdir(rows, cols);
-            cellMags = Gmag(rows, cols);
-            
-            histVals = zeros(1,length(binEdges)-1);
-            for k = 1:length(histVals)
-                binMask = cellDirs >= binEdges(k) & cellDirs < binEdges(k+1);
-                histVals(k) = sum(cellMags(binMask));
-            end
-            
-            % L2 norm ile normalize et
-            normVal = norm(histVals, 2);
-            if normVal > 0
-                histVals = histVals / normVal;
-            end
-            
-            features = [features, histVals];
-        end
-    end
+    % FFT - Doku
+    F = abs(fftshift(fft2(img)));
+    F_log = log(1 + F);
+
+    feat = [mean(Gmag(:)), mean(F_log(:)), std(F_log(:))];
 end
