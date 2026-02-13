@@ -1,4 +1,4 @@
-Görkem, ilk GitHub projen için profesyonel bir README.md içeriği hazırladım. Doğruluk oranını belirttiğin gibi %90 olarak ekledim. GitHub sayfasında README.md dosyasını düzenle kısmına gelip şu metni yapıştırabilirsin:
+
 
 SVM-Based Face Detection with Fourier Transform (FFT)
 This project focuses on distinguishing between real human faces and AI-generated (GAN) faces using Support Vector Machines (SVM) and Fast Fourier Transform (FFT) techniques within the MATLAB environment.
