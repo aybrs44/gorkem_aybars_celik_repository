@@ -1,0 +1,177 @@
+import sys
+import os
+import cv2
+import numpy as np
+import customtkinter as ctk
+from PIL import Image, ImageTk
+import pandas as pd
+import time
+from datetime import datetime
+
+# --- 1. SİSTEM YOLU ---
+sys.path = [p for p in sys.path if "Python311" not in p and "AppData" not in p]
+venv_site = r"C:\Users\asus\yuz_env\Lib\site-packages"
+if os.path.exists(venv_site):
+    sys.path.insert(0, venv_site)
+
+from sklearn import svm
+from sklearn.preprocessing import StandardScaler
+
+# --- 2. YÜZ DEDEKTÖRÜ ---
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
+def extract_face_features(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+    if len(faces) > 0:
+        (x, y, w, h) = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)[0]
+        face_roi = cv2.resize(gray[y:y+h, x:x+w], (64, 64))
+        img_norm = face_roi.astype(np.float32) / 255.0
+        gx = cv2.Sobel(img_norm, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(img_norm, cv2.CV_32F, 0, 1, ksize=3)
+        gmag = np.sqrt(gx**2 + gy**2)
+        f = np.fft.fft2(img_norm)
+        f_log = np.log(1 + np.abs(np.fft.fftshift(f)))
+        return [np.mean(gmag), np.mean(f_log), np.std(f_log)], (x, y, w, h)
+    return None, None
+
+class YuzTanimaUygulamasi(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+        self.title("Görkem Personel Takip V2.9 - Yeni Rapor")
+        self.geometry("1000x800")
+        
+        self.staff_config = {
+            "AHMET": "22:31",
+            "REAL_PERSON": "22:32"
+        }
+        self.entered_today = set()
+        self.absent_marked = set()
+        self.success_streak = 0
+        self.is_trained = False
+        
+        self.main_frame = ctk.CTkFrame(self)
+        self.main_frame.pack(padx=20, pady=20, fill="both", expand=True)
+        
+        self.video_label = ctk.CTkLabel(self.main_frame, text="")
+        self.video_label.pack(expand=True, pady=10)
+        
+        self.status_label = ctk.CTkLabel(self.main_frame, text="SİSTEM HAZIRLANIYOR...", font=ctk.CTkFont(size=20, weight="bold"))
+        self.status_label.pack(pady=10)
+
+        self.cap = cv2.VideoCapture(0)
+        self.train_model()
+        self.update_engine()
+
+    def train_model(self):
+        self.X, self.Y, self.names = [], [], []
+        ignore = ['Giris_Kayitlari', 'yuz_env', '__pycache__', 'Fake_People', '.ipynb_checkpoints']
+        folders = [d for d in os.listdir() if os.path.isdir(d) and d not in ignore and not d.startswith('.')]
+        
+        for idx, folder in enumerate(folders):
+            for file in os.listdir(folder):
+                if file.lower().endswith(('.jpg', '.png', '.jpeg')):
+                    img = cv2.imread(os.path.join(folder, file))
+                    if img is not None:
+                        feat, _ = extract_face_features(img)
+                        if feat:
+                            self.X.append(feat)
+                            self.Y.append(idx)
+                            self.names.append(folder.upper())
+        
+        if os.path.exists('Fake_People'):
+            for file in os.listdir('Fake_People'):
+                img = cv2.imread(os.path.join('Fake_People', file))
+                if img is not None:
+                    feat, _ = extract_face_features(img)
+                    if feat:
+                        self.X.append(feat)
+                        self.Y.append(-1)
+                        self.names.append("BİLİNMEYEN")
+
+        if len(set(self.Y)) < 2:
+            self.status_label.configure(text="Eğitim hatası: Yetersiz veri!", text_color="red")
+            return
+
+        self.scaler = StandardScaler()
+        X_n = self.scaler.fit_transform(np.array(self.X))
+        self.clf = svm.SVC(kernel='rbf', probability=True)
+        self.clf.fit(X_n, self.Y)
+        self.is_trained = True
+        self.status_label.configure(text="DENETİM AKTİF", text_color="white")
+
+    def check_absenteeism(self):
+        now_str = datetime.now().strftime("%H:%M")
+        for person, start_time in self.staff_config.items():
+            if now_str >= start_time and person not in self.entered_today and person not in self.absent_marked:
+                self.save_to_excel(person, status="GELMEDİ", start_time=start_time)
+                self.absent_marked.add(person)
+
+    def update_engine(self):
+        ret, frame = self.cap.read()
+        self.check_absenteeism()
+        
+        if ret and self.is_trained:
+            feat, face_coords = extract_face_features(frame)
+            if feat and face_coords:
+                x, y, w, h = face_coords
+                cv2.rectangle(frame, (x, y), (x+w, y+h), (0, 255, 0), 2)
+                
+                probs = self.clf.predict_proba(self.scaler.transform([feat]))[0]
+                max_prob = np.max(probs)
+                prediction = self.clf.predict(self.scaler.transform([feat]))[0]
+                
+                if prediction != -1 and max_prob > 0.85:
+                    p_name = self.names[self.Y.index(prediction)]
+                    if p_name not in self.entered_today:
+                        self.success_streak += 1
+                        if self.success_streak >= 5:
+                            m_saati = self.staff_config.get(p_name, "--:--")
+                            self.save_to_excel(p_name, status="GİRİŞ ONAYLANDI", start_time=m_saati)
+                            self.entered_today.add(p_name)
+                            self.status_label.configure(text=f"{p_name} GİRİŞ YAPTI", text_color="#2ecc71")
+                else:
+                    self.status_label.configure(text="YÜZ TANINAMIYOR", text_color="orange")
+            else:
+                self.status_label.configure(text="YÜZ BEKLENİYOR...", text_color="white")
+
+            img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            img_tk = ctk.CTkImage(light_image=Image.fromarray(img_rgb), dark_image=Image.fromarray(img_rgb), size=(640, 480))
+            self.video_label.configure(image=img_tk)
+            
+        self.after(10, self.update_engine)
+
+    def save_to_excel(self, name, status, start_time):
+        dt = datetime.now().strftime("%Y-%m-%d")
+        tm = datetime.now().strftime("%H:%M:%S")
+        
+        # TEK SEFERLİK YENİ DOSYA ADI
+        log_file = "Giris_Kayitlari/guncel_personel_raporu.xlsx"
+        
+        df_new = pd.DataFrame({
+            "TARİH": [dt],
+            "İSİM": [name],
+            "MESAİ SAATİ": [start_time],
+            "KAYIT SAATİ": [tm],
+            "DURUM": [status]
+        })
+        
+        try:
+            if not os.path.exists("Giris_Kayitlari"): os.makedirs("Giris_Kayitlari")
+            if os.path.exists(log_file):
+                df_old = pd.read_excel(log_file)
+                df_final = pd.concat([df_old, df_new], ignore_index=True)
+            else:
+                df_final = df_new
+
+            with pd.ExcelWriter(log_file, engine='openpyxl') as writer:
+                df_final.to_excel(writer, index=False, sheet_name='Rapor')
+                worksheet = writer.sheets['Rapor']
+                for col in ['A', 'B', 'C', 'D', 'E']:
+                    worksheet.column_dimensions[col].width = 20
+        except Exception as e:
+            print(f"Excel Hatası: {e}")
+
+if __name__ == "__main__":
+    app = YuzTanimaUygulamasi()
+    app.mainloop()
