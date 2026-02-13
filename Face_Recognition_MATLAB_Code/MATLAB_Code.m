@@ -1,84 +1,99 @@
 clc; clear; close all;
 
-%% 1. MODEL EĞİTİMİ (HIZLI VE STABİL)
-posFolder = 'Real_Person';
-negFolder = 'Fake_People';
+%% 1. MODEL TRAINING (STABLE & ROBUST)
+positive_folder = 'Real_Person';
+negative_folder = 'Fake_People';
 
-posFiles = dir(fullfile(posFolder, '*.jpg'));
-negFiles = dir(fullfile(negFolder, '*.jpg'));
+pos_files = dir(fullfile(positive_folder, '*.jpg'));
+neg_files = dir(fullfile(negative_folder, '*.jpg'));
 
 X = []; Y = [];
-fprintf('Model eğitiliyor, lütfen bekleyin...\n');
+fprintf('Status: Training the SVM model. Please wait...\n');
 
-for i = 1:length(posFiles)
-    img = imread(fullfile(posFolder, posFiles(i).name));
-    X = [X; my_simple_features(img)];
+% Process Positive Samples
+for i = 1:length(pos_files)
+    img = imread(fullfile(positive_folder, pos_files(i).name));
+    X = [X; get_verification_features(img)];
     Y = [Y; 1];
 end
 
-for i = 1:length(negFiles)
-    img = imread(fullfile(negFolder, negFiles(i).name));
-    X = [X; my_simple_features(img)];
+% Process Negative Samples
+for i = 1:length(neg_files)
+    img = imread(fullfile(negative_folder, neg_files(i).name));
+    X = [X; get_verification_features(img)];
     Y = [Y; -1];
 end
 
-% Normalizasyon ve SVM (RBF Kernel)
-mu = mean(X); sigma = std(X); sigma(sigma == 0) = 1;
+% Normalization
+mu = mean(X); 
+sigma = std(X); 
+sigma(sigma == 0) = 1; % Avoid division by zero
 X_norm = (X - mu) ./ sigma;
+
+% Train SVM with RBF Kernel for non-linear decision boundaries
 SVMModel = fitcsvm(X_norm, Y, 'KernelFunction', 'rbf', 'Standardize', true);
 
-% Eşik Ayarı (Seni tanıması için güvenli alan)
+% Calculate Security Threshold
 [~, scores] = predict(SVMModel, X_norm);
-posScores = scores(Y==1, 2);
-safe_threshold = mean(posScores) - 1.8 * std(posScores); 
+pos_scores = scores(Y==1, 2);
+security_threshold = mean(pos_scores) - 1.8 * std(pos_scores); 
 
-fprintf('Sistem Hazır! 10 karelik analiz başlıyor...\n');
+fprintf('Status: System Ready! Security Threshold: %.4f\n', security_threshold);
 
-%% 2. 10 KARELİK ADIM ADIM TEST (KASMA YAPMAZ)
+%% 2. STEP-BY-STEP LIVE VERIFICATION (10 CYCLES)
 try
     cam = webcam;
 catch
-    delete(webcamlist); cam = webcam;
+    delete(webcamlist); 
+    cam = webcam;
 end
 
+fprintf('\n--- Starting 10-Frame Verification Process ---\n');
+
 for i = 1:10
-    fprintf('\n%d. Kare için hazırlan... (3 saniye)', i);
-    pause(3); % Poz vermen için zaman tanır
+    fprintf('\nFrame [%d/10]: Get ready... (3 seconds)', i);
+    pause(3); % Time to adjust your pose or test with your hand
     
-    % Fotoğrafı çek ve kamerayı o anlık dondur
-    img_live = snapshot(cam);
+    % Capture Snapshot
+    live_frame = snapshot(cam);
     
-    % Analiz et
-    feat_live = my_simple_features(img_live);
-    feat_norm = (feat_live - mu) ./ sigma;
-    [label, score] = predict(SVMModel, feat_norm);
+    % Extract and Normalize Features
+    live_feat = get_verification_features(live_frame);
+    live_feat_norm = (live_feat - mu) ./ sigma;
     
-    % Karar Mekanizması
-    if label == 1 && score(2) > safe_threshold
-        fprintf('\n>>> SONUÇ: BU SENSİN (Skor: %.2f)\n', score(2));
-        % Görsel onay istersen imshow(img_live) buraya eklenebilir ama şart değil
+    % Prediction
+    [label, score] = predict(SVMModel, live_feat_norm);
+    current_score = score(2);
+    
+    % Decision Logic
+    if label == 1 && current_score > security_threshold
+        fprintf('\n>>> RESULT: ACCESS GRANTED (Score: %.2f)\n', current_score);
+        fprintf('User: GORKEM AYBARS CELIK\n');
     else
-        fprintf('\n>>> SONUÇ: SEN DEĞİLSİN (Skor: %.2f)\n', score(2));
+        fprintf('\n>>> RESULT: ACCESS DENIED (Score: %.2f)\n', current_score);
+        fprintf('Identity: UNKNOWN / BLOCKED\n');
     end
 end
 
 clear cam;
-fprintf('\n10 karelik test tamamlandı.\n');
+fprintf('\n--- Verification process completed. ---\n');
 
-%% --- HAFİF ÖZNİTELİK FONKSİYONU ---
-function feat = my_simple_features(img)
+%% --- FEATURE EXTRACTION FUNCTION ---
+function feat = get_verification_features(img)
+    % Pre-processing
     if size(img, 3) == 3, img = rgb2gray(img); end
     img = imresize(img, [64 64]);
     img = im2double(img);
 
-    % Sobel - Kenar
+    % Sobel Edge Analysis (Structural features)
     Gx = conv2(img, [1 0 -1; 2 0 -2; 1 0 -1], 'same');
     Gy = conv2(img, [1 2 1; 0 0 0; -1 -2 -1], 'same');
-    Gmag = sqrt(Gx.^2 + Gy.^2);
+    gradient_magnitude = sqrt(Gx.^2 + Gy.^2);
     
-    % FFT - Doku
+    % FFT Magnitude Analysis (Texture/Frequency features)
     F = abs(fftshift(fft2(img)));
     F_log = log(1 + F);
 
-    feat = [mean(Gmag(:)), mean(F_log(:)), std(F_log(:))];
+    % Return stable feature vector
+    feat = [mean(gradient_magnitude(:)), mean(F_log(:)), std(F_log(:))];
 end
