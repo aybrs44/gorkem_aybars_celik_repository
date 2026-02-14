@@ -3,88 +3,88 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import os
-import winsound
 
-# --- DOSYA YOLLARI AYARI ---
-# Kodun çalıştığı ana klasörü alıyoruz
-BASE_DIR = os.getcwd() 
+# --- DOSYA YOLLARI ---
+BASE_DIR = os.getcwd()
 EXCEL_KLASOR = os.path.join(BASE_DIR, "Giris_Kayitlari")
 EXCEL_YOLU = os.path.join(EXCEL_KLASOR, "Personel_Takip.xlsx")
-SES_YOLU = os.path.join(BASE_DIR, "onay.wav")
 
-# Klasör yoksa hemen oluştur ki Excel hatası almayalım
 if not os.path.exists(EXCEL_KLASOR):
     os.makedirs(EXCEL_KLASOR)
 
 PARLAKLIK_ESIGI = 20
 
+
+# Ses şimdilik kapalı (yapı korunuyor)
 def onay_sesi():
-    try:
-        if os.path.exists(SES_YOLU):
-            # SND_ASYNC: Görüntü donmasın diye arka planda çal
-            winsound.PlaySound(SES_YOLU, winsound.SND_FILENAME | winsound.SND_ASYNC)
-        else:
-            # Dosya yoksa en azından bip sesi çıkar ki çalıştığını anlayalım
-            winsound.Beep(1000, 400)
-            print(f"SES DOSYASI BULUNAMADI: {SES_YOLU}")
-    except Exception as e:
-        print(f"Ses hatası: {e}")
+    pass
+
 
 def kaydet_excel(isim, soyisim):
     try:
-        tarih = datetime.now().strftime("%Y-%m-%d")
-        saat = datetime.now().strftime("%H:%M:%S")
-        
-        if not os.path.exists(EXCEL_YOLU):
-            df = pd.DataFrame(columns=["İsim", "Soyisim", "Tarih", "Giriş", "Çıkış", "Durum"])
-        else:
-            df = pd.read_excel(EXCEL_YOLU)
+        simdi = datetime.now()
+        tarih = simdi.strftime("%Y-%m-%d")
+        saat = simdi.strftime("%H:%M:%S")
 
-        kisi_bugun = df[(df['İsim'] == isim) & (df['Tarih'] == tarih)]
+        if os.path.exists(EXCEL_YOLU):
+            df = pd.read_excel(EXCEL_YOLU)
+        else:
+            df = pd.DataFrame(columns=["İsim", "Soyisim", "Tarih", "Giriş", "Çıkış", "Durum"])
+
+        kisi_bugun = df[(df["İsim"] == isim) & (df["Tarih"] == tarih)]
 
         if kisi_bugun.empty:
-            yeni_kayit = {"İsim": isim, "Soyisim": soyisim, "Tarih": tarih, "Giriş": saat, "Durum": "İş Başında"}
-            df = pd.concat([df, pd.DataFrame([yeni_kayit])], ignore_index=True)
+            yeni = {
+                "İsim": isim,
+                "Soyisim": soyisim,
+                "Tarih": tarih,
+                "Giriş": saat,
+                "Durum": "İş Başında"
+            }
+            df = pd.concat([df, pd.DataFrame([yeni])], ignore_index=True)
             onay_sesi()
             print(f"{isim} Giriş Kaydedildi.")
+
         else:
             index = kisi_bugun.index[-1]
-            if pd.isna(df.loc[index, 'Çıkış']):
-                df.loc[index, 'Çıkış'] = saat
-                df.loc[index, 'Durum'] = "Mesai Bitti"
+
+            if pd.isna(df.loc[index, "Çıkış"]):
+                df.loc[index, "Çıkış"] = saat
+                df.loc[index, "Durum"] = "Mesai Bitti"
                 onay_sesi()
                 print(f"{isim} Çıkış Kaydedildi.")
             else:
                 print("Zaten giriş-çıkış yapılmış.")
 
         df.to_excel(EXCEL_YOLU, index=False)
+
     except Exception as e:
         print(f"Excel hatası: {e}")
 
-# Kamera Başlatma
+
+# --- KAMERA ---
 cap = cv2.VideoCapture(0)
 
 while True:
     ret, frame = cap.read()
-    if not ret: break
+    if not ret:
+        break
 
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    parlaklik = np.mean(gray)
+    parlaklik = np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
 
     if parlaklik < PARLAKLIK_ESIGI:
-        black_screen = np.zeros((480, 640, 3), dtype=np.uint8)
-        cv2.putText(black_screen, "UYKU MODU (KAPAK KAPALI)", (150, 240), 
+        ekran = np.zeros((480, 640, 3), dtype=np.uint8)
+        cv2.putText(ekran, "UYKU MODU (KAPAK KAPALI)", (150, 240),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        cv2.imshow("Gorkem Personel Takip", black_screen)
+        cv2.imshow("Gorkem Personel Takip", ekran)
     else:
-        # TEST İÇİN 'S' TUŞU
         key = cv2.waitKey(1) & 0xFF
-        if key == ord('s'):
+        if key == ord("s"):
             kaydet_excel("Gorkem", "Celik")
-            
+
         cv2.imshow("Gorkem Personel Takip", frame)
 
-    if cv2.waitKey(1) & 0xFF == ord('q'):
+    if cv2.waitKey(1) & 0xFF == ord("q"):
         break
 
 cap.release()
