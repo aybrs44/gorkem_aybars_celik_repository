@@ -1,0 +1,107 @@
+import sys
+import os
+import time
+from datetime import datetime
+import winsound
+import pyautogui as pg
+import pandas as pd
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+
+# --- AYARLAR ---
+HEDEF_KLASOR = r"C:\Yuz\dist\Gorkem_Personel_Takip\Giris_Kayitlari"
+EXCEL_YOLU = os.path.join(HEDEF_KLASOR, "guncel_personel_raporu.xlsx")
+TEL_NO = "05xxxxx"
+RAPOR_SAATI = "23:25" # Test için güncelle
+rapor_bitti = False
+
+def dosya_kopyala_windows(yol):
+    os.system(f'powershell -command "Set-Clipboard -Path {yol}"')
+
+def pdf_olustur_ve_gonder():
+    try:
+        bugun = datetime.now().strftime("%Y-%m-%d")
+        dosya_adi = os.path.join(HEDEF_KLASOR, f"Tam_Rapor_{bugun}.pdf")
+        
+        # 1. PDF BAŞLATMA
+        c = canvas.Canvas(dosya_adi, pagesize=A4)
+        c.setFont("Helvetica-Bold", 14)
+        c.drawString(50, 800, f"Gorkem Personel Takip Sistemi - Gunluk Rapor")
+        c.setFont("Helvetica", 10)
+        c.drawString(50, 785, f"Tarih: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}")
+        c.line(50, 780, 550, 780)
+
+        # Tablo Başlıkları
+        y = 755
+        c.setFont("Helvetica-Bold", 9)
+        headers = ["TARIH", "PERSONEL ADI", "MESAI", "SAAT", "DURUM"]
+        x_positions = [50, 130, 250, 320, 420]
+        for i, header in enumerate(headers):
+            c.drawString(x_positions[i], y, header)
+        
+        c.line(50, y-5, 550, y-5)
+        y -= 25
+
+        # 2. EXCEL VERİLERİNİ ÇEKME
+        if os.path.exists(EXCEL_YOLU):
+            # Excel'i oku (Sütun isimlerinden bağımsız olarak iloc ile çekiyoruz)
+            df = pd.read_excel(EXCEL_YOLU)
+            c.setFont("Helvetica", 9)
+            
+            # DataFrame'deki her satırı PDF'e işle
+            for index, satir in df.iterrows():
+                if y < 50: # Sayfa biterse yeni sayfaya geç
+                    c.showPage()
+                    y = 800
+                    c.setFont("Helvetica", 9)
+
+                # Verileri PDF'e yaz (iloc[0], iloc[1] vb. sırayla çeker)
+                # str() kullanarak hata payını sıfırlıyoruz
+                c.drawString(x_positions[0], y, str(satir.iloc[0])[:10]) # Tarih
+                c.drawString(x_positions[1], y, str(satir.iloc[1]))      # Ad Soyad
+                c.drawString(x_positions[2], y, str(satir.iloc[2]))      # Mesai Süresi
+                c.drawString(x_positions[3], y, str(satir.iloc[3]))      # Kayıt Saati
+                c.drawString(x_positions[4], y, str(satir.iloc[4]))      # Durum
+                
+                y -= 18 # Bir sonraki satıra geç
+
+        c.save()
+        print(f"\n[1] Veriler Excel'den çekildi ve PDF oluşturuldu.")
+
+        # 3. WHATSAPP GÖNDERİM (Az önce başardığımız yöntem)
+        dosya_kopyala_windows(dosya_adi)
+        pg.press('win')
+        time.sleep(1)
+        pg.write('WhatsApp')
+        time.sleep(1)
+        pg.press('enter')
+        time.sleep(10)
+        
+        pg.hotkey('ctrl', 'f')
+        time.sleep(2)
+        pg.write(TEL_NO)
+        time.sleep(4)
+        pg.press('enter')
+        time.sleep(3)
+        
+        pg.hotkey('ctrl', 'v')
+        time.sleep(6)
+        pg.press('enter')
+        time.sleep(2)
+        pg.press('enter')
+        
+        print(f"[OK] Rapor eksiksiz gönderildi!")
+        winsound.PlaySound("SystemAsterisk", winsound.SND_ALIAS)
+
+    except Exception as e:
+        print(f"Hata: {e}")
+
+# Döngü
+while True:
+    simdi = datetime.now().strftime("%H:%M")
+    if simdi == RAPOR_SAATI and not rapor_bitti:
+        pdf_olustur_ve_gonder()
+        rapor_bitti = True
+    if simdi == "00:00":
+        rapor_bitti = False
+    time.sleep(5)
