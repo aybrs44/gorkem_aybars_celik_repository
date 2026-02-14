@@ -1,1 +1,181 @@
+import cv2
 
+import pandas as pd
+
+import numpy as np
+
+from datetime import datetime
+
+import os
+
+
+
+# --- DOSYA YOLLARI ---
+
+BASE_DIR = os.getcwd()
+
+EXCEL_KLASOR = os.path.join(BASE_DIR, "Giris_Kayitlari")
+
+EXCEL_YOLU = os.path.join(EXCEL_KLASOR, "Personel_Takip.xlsx")
+
+
+
+if not os.path.exists(EXCEL_KLASOR):
+
+    os.makedirs(EXCEL_KLASOR)
+
+
+
+PARLAKLIK_ESIGI = 20
+
+
+
+
+
+# Ses şimdilik kapalı (yapı korunuyor)
+
+def onay_sesi():
+
+    pass
+
+
+
+
+
+def kaydet_excel(isim, soyisim):
+
+    try:
+
+        simdi = datetime.now()
+
+        tarih = simdi.strftime("%Y-%m-%d")
+
+        saat = simdi.strftime("%H:%M:%S")
+
+
+
+        if os.path.exists(EXCEL_YOLU):
+
+            df = pd.read_excel(EXCEL_YOLU)
+
+        else:
+
+            df = pd.DataFrame(columns=["İsim", "Soyisim", "Tarih", "Giriş", "Çıkış", "Durum"])
+
+
+
+        kisi_bugun = df[(df["İsim"] == isim) & (df["Tarih"] == tarih)]
+
+
+
+        if kisi_bugun.empty:
+
+            yeni = {
+
+                "İsim": isim,
+
+                "Soyisim": soyisim,
+
+                "Tarih": tarih,
+
+                "Giriş": saat,
+
+                "Durum": "İş Başında"
+
+            }
+
+            df = pd.concat([df, pd.DataFrame([yeni])], ignore_index=True)
+
+            onay_sesi()
+
+            print(f"{isim} Giriş Kaydedildi.")
+
+
+
+        else:
+
+            index = kisi_bugun.index[-1]
+
+
+
+            if pd.isna(df.loc[index, "Çıkış"]):
+
+                df.loc[index, "Çıkış"] = saat
+
+                df.loc[index, "Durum"] = "Mesai Bitti"
+
+                onay_sesi()
+
+                print(f"{isim} Çıkış Kaydedildi.")
+
+            else:
+
+                print("Zaten giriş-çıkış yapılmış.")
+
+
+
+        df.to_excel(EXCEL_YOLU, index=False)
+
+
+
+    except Exception as e:
+
+        print(f"Excel hatası: {e}")
+
+
+
+
+
+# --- KAMERA ---
+
+cap = cv2.VideoCapture(0)
+
+
+
+while True:
+
+    ret, frame = cap.read()
+
+    if not ret:
+
+        break
+
+
+
+    parlaklik = np.mean(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+
+
+
+    if parlaklik < PARLAKLIK_ESIGI:
+
+        ekran = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        cv2.putText(ekran, "UYKU MODU (KAPAK KAPALI)", (150, 240),
+
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+        cv2.imshow("Gorkem Personel Takip", ekran)
+
+    else:
+
+        key = cv2.waitKey(1) & 0xFF
+
+        if key == ord("s"):
+
+            kaydet_excel("Gorkem", "Celik")
+
+
+
+        cv2.imshow("Gorkem Personel Takip", frame)
+
+
+
+    if cv2.waitKey(1) & 0xFF == ord("q"):
+
+        break
+
+
+
+cap.release()
+
+cv2.destroyAllWindows()
