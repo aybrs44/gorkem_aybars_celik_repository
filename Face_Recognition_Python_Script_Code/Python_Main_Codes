@@ -3,49 +3,63 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import os
-import winsound  # Windows onay sesleri için
+import winsound
 
-# --- AYARLAR ---
-EXCEL_YOLU = "Giris_Kayitlari/Personel_Takip.xlsx"
-PARLAKLIK_ESIGI = 20  # Nesne kapalıyken parlaklık genelde 10'un altındadır
+# --- DOSYA YOLLARI AYARI ---
+# Kodun çalıştığı ana klasörü alıyoruz
+BASE_DIR = os.getcwd() 
+EXCEL_KLASOR = os.path.join(BASE_DIR, "Giris_Kayitlari")
+EXCEL_YOLU = os.path.join(EXCEL_KLASOR, "Personel_Takip.xlsx")
+SES_YOLU = os.path.join(BASE_DIR, "onay.wav")
 
-def onay_sesi(tur="giris"):
-    if tur == "giris":
-        winsound.Beep(1000, 200) # 1000 Hz, 200 ms (İnce Bip)
-    else:
-        winsound.Beep(600, 400)  # 600 Hz, 400 ms (Kalın Bip)
+# Klasör yoksa hemen oluştur ki Excel hatası almayalım
+if not os.path.exists(EXCEL_KLASOR):
+    os.makedirs(EXCEL_KLASOR)
+
+PARLAKLIK_ESIGI = 20
+
+def onay_sesi():
+    try:
+        if os.path.exists(SES_YOLU):
+            # SND_ASYNC: Görüntü donmasın diye arka planda çal
+            winsound.PlaySound(SES_YOLU, winsound.SND_FILENAME | winsound.SND_ASYNC)
+        else:
+            # Dosya yoksa en azından bip sesi çıkar ki çalıştığını anlayalım
+            winsound.Beep(1000, 400)
+            print(f"SES DOSYASI BULUNAMADI: {SES_YOLU}")
+    except Exception as e:
+        print(f"Ses hatası: {e}")
 
 def kaydet_excel(isim, soyisim):
-    tarih = datetime.now().strftime("%Y-%m-%d")
-    saat = datetime.now().strftime("%H:%M:%S")
-    
-    if not os.path.exists(EXCEL_YOLU):
-        df = pd.DataFrame(columns=["İsim", "Soyisim", "Tarih", "Giriş", "Çıkış", "Durum"])
-    else:
-        df = pd.read_excel(EXCEL_YOLU)
-
-    # Bugün bu kişi zaten işlem yapmış mı?
-    kisi_bugun = df[(df['İsim'] == isim) & (df['Tarih'] == tarih)]
-
-    if kisi_bugun.empty:
-        # İLK GÖRÜNÜŞ -> GİRİŞ
-        yeni_kayit = {"İsim": isim, "Soyisim": soyisim, "Tarih": tarih, "Giriş": saat, "Durum": "İş Başında"}
-        df = pd.concat([df, pd.DataFrame([yeni_kayit])], ignore_index=True)
-        onay_sesi("giris")
-        print(f"{isim} Giriş Yaptı.")
-    else:
-        # ZATEN GİRİŞİ VAR -> ÇIKIŞ (Eğer Çıkış sütunu boşsa doldur)
-        index = kisi_bugun.index[-1]
-        if pd.isna(df.loc[index, 'Çıkış']):
-            df.loc[index, 'Çıkış'] = saat
-            df.loc[index, 'Durum'] = "Mesai Bitti"
-            onay_sesi("cikis")
-            print(f"{isim} Çıkış Yaptı.")
+    try:
+        tarih = datetime.now().strftime("%Y-%m-%d")
+        saat = datetime.now().strftime("%H:%M:%S")
+        
+        if not os.path.exists(EXCEL_YOLU):
+            df = pd.DataFrame(columns=["İsim", "Soyisim", "Tarih", "Giriş", "Çıkış", "Durum"])
         else:
-            # Zaten hem giriş hem çıkış yapılmışsa tekrar işlem yapma (veya isteğe göre güncelle)
-            pass
+            df = pd.read_excel(EXCEL_YOLU)
 
-    df.to_excel(EXCEL_YOLU, index=False)
+        kisi_bugun = df[(df['İsim'] == isim) & (df['Tarih'] == tarih)]
+
+        if kisi_bugun.empty:
+            yeni_kayit = {"İsim": isim, "Soyisim": soyisim, "Tarih": tarih, "Giriş": saat, "Durum": "İş Başında"}
+            df = pd.concat([df, pd.DataFrame([yeni_kayit])], ignore_index=True)
+            onay_sesi()
+            print(f"{isim} Giriş Kaydedildi.")
+        else:
+            index = kisi_bugun.index[-1]
+            if pd.isna(df.loc[index, 'Çıkış']):
+                df.loc[index, 'Çıkış'] = saat
+                df.loc[index, 'Durum'] = "Mesai Bitti"
+                onay_sesi()
+                print(f"{isim} Çıkış Kaydedildi.")
+            else:
+                print("Zaten giriş-çıkış yapılmış.")
+
+        df.to_excel(EXCEL_YOLU, index=False)
+    except Exception as e:
+        print(f"Excel hatası: {e}")
 
 # Kamera Başlatma
 cap = cv2.VideoCapture(0)
@@ -54,24 +68,20 @@ while True:
     ret, frame = cap.read()
     if not ret: break
 
-    # --- AKILLI UYKU MODU ---
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     parlaklik = np.mean(gray)
 
     if parlaklik < PARLAKLIK_ESIGI:
-        # EKRANI SİYAH YAP (İşlemci yorulmasın)
         black_screen = np.zeros((480, 640, 3), dtype=np.uint8)
-        cv2.putText(black_screen, "SISTEM UYKUDA (KAPAK KAPALI)", (120, 240), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+        cv2.putText(black_screen, "UYKU MODU (KAPAK KAPALI)", (150, 240), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
         cv2.imshow("Gorkem Personel Takip", black_screen)
     else:
-        # SİSTEM UYANDI -> YÜZ TANIMA BURADA ÇALIŞACAK
-        # (Buraya senin mevcut yüz tanıma/SVM bloklarını ekleyeceksin)
-        
-        # ÖRNEK: Eğer bir yüz bulundu ve tanındıysa:
-        # isim, soyisim = "Gorkem", "Celik" 
-        # kaydet_excel(isim, soyisim)
-        
+        # TEST İÇİN 'S' TUŞU
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('s'):
+            kaydet_excel("Gorkem", "Celik")
+            
         cv2.imshow("Gorkem Personel Takip", frame)
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
